@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Artboard Ai"
+description = "A Jersey OS web app that sends one combined front-and-back jersey image to the Artboard Ai engine, reviews real detections and processing results, and exports the generated artwork."
+version = "1.0.0"
+id = "artifacts/artboard-ai-web"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24312
+
+[services.development]
+run = "pnpm --filter @workspace/artboard-ai-web run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/artboard-ai-web", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/artboard-ai-web/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24312"
+BASE_PATH = "/"
