@@ -8,6 +8,8 @@ export interface EngineCapabilities {
   canvas: {
     width_inches: number;
     height_inches: number;
+    width_mm?: number;
+    height_mm?: number;
     color_mode: string;
   };
   formats: {
@@ -73,6 +75,8 @@ export interface SourceAnalysis {
   canvas: {
     width_inches: number;
     height_inches: number;
+    width_mm?: number;
+    height_mm?: number;
     width_points: number;
     height_points: number;
     color_mode: string;

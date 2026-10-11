@@ -309,6 +309,9 @@ function App() {
   const uploadLimit = capabilities?.limits.upload_mib ?? 30;
   const megapixelLimit = capabilities?.limits.source_megapixels;
   const flatArtConfigured = capabilities?.ai_flat_artwork_reconstruction?.configured ?? false;
+  const canvasSizeMm = capabilities
+    ? `${(capabilities.canvas.width_mm ?? capabilities.canvas.width_inches * 25.4).toFixed(1)} × ${(capabilities.canvas.height_mm ?? capabilities.canvas.height_inches * 25.4).toFixed(1)}`
+    : '558.8 × 787.4';
   const selectedReconstructionMode = flatArtConfigured
     ? reconstructionMode ?? 'ai_flat_artwork'
     : 'trace_source';
@@ -646,7 +649,7 @@ function App() {
             <h1 className="aa-title">{!workflowMode ? 'Two routes. One artwork review.' : workflowMode === 'generate' && stage === 0 ? 'Describe the artwork you need.' : workflowMode === 'clip' && stage === 0 ? 'One source photo. Two separate canvases.' : stage === 1 ? 'Reading the source image' : stage === 2 ? 'Confirm front and back regions' : stage === 3 ? 'Prepare front and back artwork' : stage === 4 ? (job ? (workflowMode === 'generate' ? 'Generate, trace, and vectorize' : selectedReconstructionMode === 'ai_flat_artwork' ? 'Reconstruct, trace, and vectorize' : 'Trace source and vectorize') : 'Prepare artwork paths') : stage === 5 ? 'Review the engine report' : stage === 6 ? 'Inspect both sides' : 'Download available files'}</h1>
             <p className="aa-subtitle">{!workflowMode ? 'Choose whether to rebuild visible artwork from a photo or generate a new front-and-back design from a brief.' : workflowMode === 'clip' && stage === 0 ? 'Upload one photo showing both jersey sides. Confirm the front and back regions; the engine then creates separate artwork canvases.' : workflowMode === 'generate' && stage === 0 ? 'Generate separate front and back raster artwork from your written direction. The engine traces those images to paths; review all returned output.' : stage === 3 ? 'Confirm the front and back crops. Choose AI-assisted flat-art reconstruction or trace source pixels; AI drafts are approximate.' : 'Every status, measurement, preview and file below is returned by the connected engine. No printer approval is performed.'}</p>
           </div>
-          <div className="aa-meta">{capabilities ? <>{capabilities.engine} · {capabilities.version}<br />22 × 31 IN · CMYK · PER SIDE</> : 'ENGINE CAPABILITIES UNAVAILABLE'}</div>
+          <div className="aa-meta">{capabilities ? <>{capabilities.engine} · {capabilities.version}<br />{canvasSizeMm} MM · 22 × 31 IN · CMYK · PER SIDE</> : `LOCKED CANVAS · ${canvasSizeMm} MM · ENGINE CAPABILITIES UNAVAILABLE`}</div>
         </div>
 
         {engineState === 'offline' && <ErrorMessage message={capabilityError || 'The engine is offline. Connect it to begin.'} onRetry={() => void checkCapabilities()} />}
@@ -668,7 +671,7 @@ function App() {
             </button>
             <div className="aa-production-strip">
               <strong>PRODUCTION FRAME</strong>
-              <span>Two individual 22 × 31 in CMYK artboards</span>
+              <span>Two individual {canvasSizeMm} mm (22 × 31 in) CMYK artboards</span>
               <span>EPSF 3.0 · PostScript Level 2 · 330 / 600 DPI for raster content only</span>
               <span>Engine validation is not printer approval · native .ai unavailable</span>
             </div>
@@ -698,7 +701,7 @@ function App() {
               ) : <div className="aa-generation-block"><div className="aa-canvas-empty"><div><strong>{capabilities ? 'Artwork generation is not configured' : 'Generation capability is unknown'}</strong>{capabilities ? 'This mode is blocked because the live capabilities response reports ai_artwork_generation.configured as false.' : 'Connect to the engine and load live capabilities before submitting a generation request.'}</div></div><button type="button" className="aa-btn secondary" onClick={() => { setWorkflowMode(null); setStage(0); }}>Choose another workflow</button></div>}
             </div>
             <aside className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">DELIVERABLE CONTRACT</p><h2>Two traced artboards</h2></div><ShieldCheck size={16} color="#f2c477" /></div>
-              <div className="aa-production-details"><div className="aa-note">Front and back are specified as separate 22 × 31 inch CMYK artboards.</div><div className="aa-note">Client EPS target: EPSF 3.0 / PostScript Level 2. Live engine reports: {capabilities?.formats.eps.standard ?? 'not reported'}.</div><div className="aa-note">Generated pixels are traced to vector paths. Review output; no automatic approval.</div><div className="aa-note warn">No native .ai file, printer approval, or guarantee of hidden/detail reconstruction.</div></div>
+              <div className="aa-production-details"><div className="aa-note">Front and back are separate {canvasSizeMm} mm (22 × 31 in) CMYK artboards.</div><div className="aa-note">Client EPS target: EPSF 3.0 / PostScript Level 2. Live engine reports: {capabilities?.formats.eps.standard ?? 'not reported'}.</div><div className="aa-note">The full selected panel is mapped to the full canvas without cropping; any aspect-ratio adjustment is reported for review.</div><div className="aa-note">Generated pixels are traced to vector paths. Review output; no automatic approval.</div><div className="aa-note warn">No native .ai file, printer approval, or recovery of details hidden from the input photo.</div></div>
             </aside>
           </section>
         )}
@@ -961,7 +964,7 @@ function App() {
             <aside className="aa-card">
               <div className="aa-card-head"><div><p className="aa-eyebrow">LOCKED CANVAS RULES</p><h2>Engine specification</h2></div><LockKeyhole size={15} color="#8ddbc6" /></div>
               <div style={{ display: 'grid', gap: 8, padding: 14 }}>
-                <div className="aa-note">Separate front and back artboards: 22 × 31 in · CMYK. This client specification must be honored by the engine.</div>
+                <div className="aa-note">Separate front and back artboards: {canvasSizeMm} mm (22 × 31 in) · CMYK. This client specification must be honored by the engine.</div>
                 <div className="aa-note">{selectedReconstructionMode === 'ai_flat_artwork' ? 'Selected mode: AI-assisted flat-art draft, then editable vector paths.' : 'Selected mode: direct tracing of source pixels; photo texture can become vector shapes.'} Client EPS target EPSF 3.0 / PostScript Level 2; engine reports {capabilities?.formats.eps.standard ?? 'no EPS standard'} · SVG/EPS: {capabilities?.formats.svg.supported ? 'available' : 'unavailable'}, {capabilities?.formats.eps.supported ? 'available' : 'unavailable'}.</div>
                 {analysis && <div className="aa-quality-panel">
                   <p className="aa-eyebrow">SOURCE / UPSCALE QUALITY COMPARISON</p>
@@ -1011,13 +1014,13 @@ function App() {
                 return <article key={prefix} className="aa-card">
                 <div className="aa-card-head"><div><p className="aa-eyebrow">{side} / ENGINE OUTPUT</p><h2>{imageUrl ? prefix : `${prefix} · no preview returned`}</h2></div>{imageUrl && <a className="aa-btn secondary" href={imageUrl} download={imageName}><Download size={13} /> Download</a>}</div>
                 <div style={{ display: 'grid', gap: 12, padding: 12 }}>
-                  {draftUrl && <div><div className="aa-inline" style={{ justifyContent: 'space-between', marginBottom: 8 }}><span className="aa-meta">AI FLAT-ART DRAFT · REVIEW</span><a className="aa-btn secondary" href={draftUrl} download={draftName}><Download size={13} /> Download draft</a></div><div className="aa-output-preview"><img src={draftUrl} alt={`${side.toLowerCase()} AI-generated flat-art draft`} /></div></div>}
-                  {imageUrl ? <div><p className="aa-meta">VECTORIZED OUTPUT PREVIEW</p><div className="aa-output-preview"><img src={imageUrl} alt={`${side.toLowerCase()} vector artwork rendered by the engine`} /></div></div> : <div className="aa-canvas-empty"><div><strong>No vector preview returned</strong>The engine did not return an SVG or rendered preview image for this side.</div></div>}
+                  {draftUrl && <div><div className="aa-inline" style={{ justifyContent: 'space-between', marginBottom: 8 }}><span className="aa-meta">AI FLAT-ART DRAFT · REVIEW · {canvasSizeMm} MM</span><a className="aa-btn secondary" href={draftUrl} download={draftName}><Download size={13} /> Download draft</a></div><div className="aa-output-preview"><img src={draftUrl} alt={`${side.toLowerCase()} AI-generated flat-art draft`} /></div></div>}
+                  {imageUrl ? <div><p className="aa-meta">VECTORIZED OUTPUT PREVIEW · {canvasSizeMm} MM</p><div className="aa-output-preview"><img src={imageUrl} alt={`${side.toLowerCase()} vector artwork rendered by the engine`} /></div></div> : <div className="aa-canvas-empty"><div><strong>No vector preview returned</strong>The engine did not return an SVG or rendered preview image for this side.</div></div>}
                 </div>
                 </article>;
               })}
             </div>
-            <div style={{ padding: '0 14px 14px' }}><div className="aa-note">These are real engine outputs: the PNG draft (when requested) and a render of the vector file. This page is not a node/layer editor. Download SVG/EPS for editing in a compatible design application.</div></div>
+            <div style={{ padding: '0 14px 14px' }}><div className="aa-note">Each SVG/EPS has an exact {canvasSizeMm} mm front or back canvas. The full selected panel is mapped without an additional crop; any aspect-ratio adjustment is disclosed in the engine report, and vector tracing remains an approximation. Hidden details still require a complete, unobstructed source. This page is not a node/layer editor. Download SVG/EPS for editing in a compatible design application.</div></div>
             <div className="aa-controls" style={{ padding: '0 14px 14px' }}><button className="aa-btn secondary" type="button" onClick={() => setCurrentStage(5)}><ArrowLeft size={14} /> Validation</button><button className="aa-btn" type="button" onClick={() => { setStage(7); setHighestStage((current) => Math.max(current, 7)); }}>Export files <ArrowRight size={14} /></button></div>
           </section>
         )}
