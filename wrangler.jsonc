@@ -10,7 +10,7 @@
     "run_worker_first": true
   },
   "vars": {
-    "ARTBOARD_ENGINE_URL": "https://artboardaitool-jerseyos-engine-production.up.railway.app"
+    "ARTBOARD_ENGINE_URL": "https://artboardai-engine-production.up.railway.app/"
   },
   "ratelimits": [
     {
