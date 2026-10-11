@@ -29,6 +29,15 @@ export interface EngineCapabilities {
     requires_operator_review: boolean;
     automatic_export_or_approval: boolean;
   };
+  ai_flat_artwork_reconstruction?: {
+    configured: boolean;
+    models: string[];
+    output: string;
+    automatic_photo_flattening: boolean;
+    hidden_artwork_reconstruction: boolean;
+    requires_operator_confirmation: boolean;
+    source_fidelity_verified: boolean;
+  };
   panel_detection: {
     local_candidate_detection: boolean;
     front_back_classification_without_ai: boolean;
@@ -110,6 +119,7 @@ export interface ArtworkPanelRequest {
   source_id: string;
   crop: PixelBox;
   run_ocr: boolean;
+  reconstruction_mode: "trace_source" | "ai_flat_artwork";
 }
 
 export interface CreateArtworkJobRequest {
@@ -256,6 +266,8 @@ export const engineApi = {
       "manifest.json",
       "front-body-preview.png",
       "back-body-preview.png",
+      "front-flat-art-draft.png",
+      "back-flat-art-draft.png",
     ]);
     if (!safeFilename.has(filename)) throw new Error("Unsupported engine output.");
     const response = await fetch(

@@ -26,6 +26,8 @@ const ALLOWED_FILE_NAMES = [
   'manifest.json',
   'front-body-preview.png',
   'back-body-preview.png',
+  'front-flat-art-draft.png',
+  'back-flat-art-draft.png',
 ] as const;
 type OutputName = (typeof ALLOWED_FILE_NAMES)[number];
 type SideAssignment = 'front' | 'back' | '';
@@ -53,6 +55,7 @@ function describeJobStage(job: ArtworkJob) {
   if (stage === 'ai_generate_back') return 'AI is creating the back artwork…';
   if (stage === 'queued_generation') return 'Waiting for the artwork engine…';
   if (stage.includes(':extract')) return `Preparing the ${stage.split(':')[0]} panel…`;
+  if (stage.includes(':ai_flat_artwork')) return `AI is reconstructing a flat ${stage.split(':')[0]} artwork draft…`;
   if (stage.includes(':ocr')) return `Reading text on the ${stage.split(':')[0]} panel…`;
   if (stage.includes(':trace')) return `Auto-tracing the ${stage.split(':')[0]} panel…`;
   if (stage.includes(':vectorize')) return `Vector paths are ready for the ${stage.split(':')[0]} panel…`;
@@ -191,6 +194,7 @@ function App() {
   const [job, setJob] = useState<ArtworkJob | null>(null);
   const [dpi, setDpi] = useState<330 | 600>(330);
   const [formats, setFormats] = useState<Array<'svg' | 'eps'>>([]);
+  const [reconstructionMode, setReconstructionMode] = useState<'trace_source' | 'ai_flat_artwork' | null>(null);
   const [runOcr, setRunOcr] = useState(true);
   const [useAiAssistance, setUseAiAssistance] = useState(false);
   const [busy, setBusy] = useState('');
@@ -304,6 +308,10 @@ function App() {
   const previewUrl = uploadedSource ? engineApi.sourcePreviewUrl(uploadedSource.source_id) : localPreview;
   const uploadLimit = capabilities?.limits.upload_mib ?? 30;
   const megapixelLimit = capabilities?.limits.source_megapixels;
+  const flatArtConfigured = capabilities?.ai_flat_artwork_reconstruction?.configured ?? false;
+  const selectedReconstructionMode = flatArtConfigured
+    ? reconstructionMode ?? 'ai_flat_artwork'
+    : 'trace_source';
 
   function setCurrentStage(next: number) {
     if (next <= highestStage) setStage(next);
@@ -536,8 +544,8 @@ function App() {
     if (!uploadedSource || !frontCandidate || !backCandidate || !capabilities || formats.length === 0) return;
     const payload: CreateArtworkJobRequest = {
       panels: [
-        { side: 'front', source_id: uploadedSource.source_id, crop: frontCandidate.source_bbox_px, run_ocr: runOcr && capabilities.ocr.available },
-        { side: 'back', source_id: uploadedSource.source_id, crop: backCandidate.source_bbox_px, run_ocr: runOcr && capabilities.ocr.available },
+        { side: 'front', source_id: uploadedSource.source_id, crop: frontCandidate.source_bbox_px, run_ocr: runOcr && capabilities.ocr.available, reconstruction_mode: selectedReconstructionMode },
+        { side: 'back', source_id: uploadedSource.source_id, crop: backCandidate.source_bbox_px, run_ocr: runOcr && capabilities.ocr.available, reconstruction_mode: selectedReconstructionMode },
       ],
       dpi,
       formats,
@@ -635,8 +643,8 @@ function App() {
         <div className="aa-heading">
           <div>
             <p className="aa-kicker">ARTBOARD AI / JERSEY OS</p>
-            <h1 className="aa-title">{!workflowMode ? 'Two routes. One production review.' : workflowMode === 'generate' && stage === 0 ? 'Describe the artwork you need.' : workflowMode === 'clip' && stage === 0 ? 'One source photo. Two separate canvases.' : stage === 1 ? 'Reading the source image' : stage === 2 ? 'Confirm front and back regions' : stage === 3 ? 'Review flat artwork crops' : stage === 4 ? (job ? (workflowMode === 'generate' ? 'Generate, trace, and vectorize' : 'Auto-trace and vectorize') : 'Prepare artwork paths') : stage === 5 ? 'Review the engine report' : stage === 6 ? 'Inspect both sides' : 'Download available files'}</h1>
-            <p className="aa-subtitle">{!workflowMode ? 'Choose whether to extract visible artwork from a photo or generate a new front-and-back design from a brief.' : workflowMode === 'clip' && stage === 0 ? 'Upload one photo showing both jersey sides. The engine analyzes the photo and suggests regions; confirm front and back before reviewing their crop previews.' : workflowMode === 'generate' && stage === 0 ? 'Generate separate front and back raster artwork from your written direction. The engine traces those images to paths; review all returned output.' : stage === 3 ? 'Each selected region is previewed as a rectangle. This is not fabric dewarping; folds and hidden artwork are not reconstructed.' : 'Every status, measurement, preview and file below is returned by the connected engine. No printer approval is performed.'}</p>
+            <h1 className="aa-title">{!workflowMode ? 'Two routes. One artwork review.' : workflowMode === 'generate' && stage === 0 ? 'Describe the artwork you need.' : workflowMode === 'clip' && stage === 0 ? 'One source photo. Two separate canvases.' : stage === 1 ? 'Reading the source image' : stage === 2 ? 'Confirm front and back regions' : stage === 3 ? 'Prepare front and back artwork' : stage === 4 ? (job ? (workflowMode === 'generate' ? 'Generate, trace, and vectorize' : selectedReconstructionMode === 'ai_flat_artwork' ? 'Reconstruct, trace, and vectorize' : 'Trace source and vectorize') : 'Prepare artwork paths') : stage === 5 ? 'Review the engine report' : stage === 6 ? 'Inspect both sides' : 'Download available files'}</h1>
+            <p className="aa-subtitle">{!workflowMode ? 'Choose whether to rebuild visible artwork from a photo or generate a new front-and-back design from a brief.' : workflowMode === 'clip' && stage === 0 ? 'Upload one photo showing both jersey sides. Confirm the front and back regions; the engine then creates separate artwork canvases.' : workflowMode === 'generate' && stage === 0 ? 'Generate separate front and back raster artwork from your written direction. The engine traces those images to paths; review all returned output.' : stage === 3 ? 'Confirm the front and back crops. Choose AI-assisted flat-art reconstruction or trace source pixels; AI drafts are approximate.' : 'Every status, measurement, preview and file below is returned by the connected engine. No printer approval is performed.'}</p>
           </div>
           <div className="aa-meta">{capabilities ? <>{capabilities.engine} · {capabilities.version}<br />22 × 31 IN · CMYK · PER SIDE</> : 'ENGINE CAPABILITIES UNAVAILABLE'}</div>
         </div>
@@ -750,7 +758,7 @@ function App() {
               <div style={{ display: 'grid', gap: 12, padding: 16 }}>
                 {analysis && <div className="aa-note">The engine returned {analysis.width_px} × {analysis.height_px} px, approximately {analysis.source_ppi_at_canvas.horizontal} × {analysis.source_ppi_at_canvas.vertical} PPI at the configured canvas size.</div>}
                 <div className="aa-note warn">{useAiAssistance ? 'Opt-in AI analysis and front/back suggestions run next. Suggestions require your confirmation; confidence is not independently calibrated.' : 'Local detection identifies geometric regions only. It does not classify front versus back; enable configured AI assistance if you want side suggestions.'}</div>
-                <div className="aa-note">Fabric flattening and hidden-artwork reconstruction are not automatic. AI assistance remains opt-in and is only available when the engine reports it configured.</div>
+                <div className="aa-note">When configured, AI flat-art reconstruction can create an approximate draft from each confirmed crop. It cannot guarantee exact lettering, logos, hidden details, or color recovery.</div>
               </div>
             </aside>
           </section>
@@ -878,7 +886,7 @@ function App() {
               </div>
             ) : <div className="aa-canvas-empty"><div><strong>Flat artwork preview unavailable</strong>Return to Detection and confirm both source regions before continuing.</div></div>}
             <div style={{ padding: '0 14px 14px' }}>
-              <div className="aa-note warn">These are rectangular source crops, not de-warped fabric or reconstructed artwork. Engine processing fits the visible pixels onto the configured canvas; folds, sleeves and occluded details can still distort or hide artwork.</div>
+              <div className="aa-note warn">These are source crops, not final artwork. The next step can create an AI-assisted flat-art draft when configured; folds and hidden details may still be reconstructed inaccurately and require review.</div>
             </div>
             <div className="aa-controls" style={{ padding: '0 14px 14px' }}>
               <button type="button" className="aa-btn secondary" onClick={() => setCurrentStage(2)}><ArrowLeft size={14} /> Adjust regions</button>
@@ -909,6 +917,29 @@ function App() {
                       })}
                     </div>
                   )}
+                  <div className="aa-field">
+                    <span>Artwork preparation · applies to front and back</span>
+                    <label className="aa-note" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, opacity: flatArtConfigured ? 1 : .55 }}>
+                      <input
+                        type="radio"
+                        name="reconstruction-mode"
+                        checked={selectedReconstructionMode === 'ai_flat_artwork'}
+                        disabled={!flatArtConfigured}
+                        onChange={() => setReconstructionMode('ai_flat_artwork')}
+                      />
+                      <span><strong>AI-assisted flat artwork</strong><br />{flatArtConfigured ? `Uses ${capabilities?.ai_flat_artwork_reconstruction?.models.join(' → ') || 'the configured image model'} to make an approximate clean-art draft, then traces it to vector paths.` : 'Unavailable: the engine does not report an image-generation provider.'}</span>
+                    </label>
+                    <label className="aa-note" style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <input
+                        type="radio"
+                        name="reconstruction-mode"
+                        checked={selectedReconstructionMode === 'trace_source'}
+                        onChange={() => setReconstructionMode('trace_source')}
+                      />
+                      <span><strong>Trace source pixels</strong><br />Creates editable paths from visible photo colors; folds, lighting and jersey texture can remain in the artwork.</span>
+                    </label>
+                    {selectedReconstructionMode === 'ai_flat_artwork' && <div className="aa-note warn">AI reconstruction is approximate, not recovery of the original designer file. Verify text, logos, colors and any obscured areas before using the SVG/EPS.</div>}
+                  </div>
                   <div className="aa-field"><span>Raster equivalent resolution · applies only if raster content remains</span><div className="aa-inline">{([330, 600] as const).map((value) => <button key={value} type="button" className={`aa-btn ${dpi === value ? '' : 'secondary'}`} aria-pressed={dpi === value} onClick={() => setDpi(value)}>{value} DPI</button>)}</div></div>
                   <div className="aa-field"><span>Output vector formats</span><div className="aa-inline">{(['svg', 'eps'] as const).map((format) => {
                     const supported = capabilities?.formats[format].supported ?? false;
@@ -922,7 +953,7 @@ function App() {
                     <input type="checkbox" checked={runOcr && Boolean(capabilities?.ocr.available)} disabled={!capabilities?.ocr.available} onChange={(event) => setRunOcr(event.currentTarget.checked)} />
                     Run OCR text observations · advisory only · {capabilities?.ocr.available ? capabilities.ocr.engine : 'unavailable'}
                   </label>
-                  <div className="aa-note warn">{useAiAssistance ? 'Opt-in AI was requested for image analysis and panel suggestions only; it does not approve or export artwork.' : 'AI was not invoked. Native AI mode remains disabled; fabric flattening and hidden artwork reconstruction are not automatic.'}</div>
+                  <div className="aa-note warn">{selectedReconstructionMode === 'ai_flat_artwork' ? 'AI will create a review-only flat-art draft, then the engine will vectorize it. It may alter fine details; this is not native AI format export or printer approval.' : useAiAssistance ? 'Opt-in AI was requested for image analysis and panel suggestions only; the source image will be traced without flat-art reconstruction.' : 'Source pixels will be traced directly; this can produce vectorized photo texture rather than clean artwork.'}</div>
                   <div className="aa-controls"><button type="button" className="aa-btn secondary" onClick={() => setCurrentStage(2)}><ArrowLeft size={14} /> Back to regions</button><button type="button" className="aa-btn" disabled={!canStartJob || Boolean(busy) || !capabilities} onClick={() => void createArtworkJob()} data-testid="button-create-job">{busy === 'job' ? <><LoaderCircle size={14} /> Creating job</> : <>Create artwork job <ArrowRight size={14} /></>}</button></div>
                 </div>
               )}
@@ -931,7 +962,7 @@ function App() {
               <div className="aa-card-head"><div><p className="aa-eyebrow">LOCKED CANVAS RULES</p><h2>Engine specification</h2></div><LockKeyhole size={15} color="#8ddbc6" /></div>
               <div style={{ display: 'grid', gap: 8, padding: 14 }}>
                 <div className="aa-note">Separate front and back artboards: 22 × 31 in · CMYK. This client specification must be honored by the engine.</div>
-                <div className="aa-note">Trace mode: {capabilities?.processing.color_vector_tracing ? 'engine reports color vector tracing' : 'color vector tracing not reported'} · client EPS target EPSF 3.0 / PostScript Level 2; engine reports {capabilities?.formats.eps.standard ?? 'no EPS standard'} · SVG/EPS: {capabilities?.formats.svg.supported ? 'available' : 'unavailable'}, {capabilities?.formats.eps.supported ? 'available' : 'unavailable'}.</div>
+                <div className="aa-note">{selectedReconstructionMode === 'ai_flat_artwork' ? 'Selected mode: AI-assisted flat-art draft, then editable vector paths.' : 'Selected mode: direct tracing of source pixels; photo texture can become vector shapes.'} Client EPS target EPSF 3.0 / PostScript Level 2; engine reports {capabilities?.formats.eps.standard ?? 'no EPS standard'} · SVG/EPS: {capabilities?.formats.svg.supported ? 'available' : 'unavailable'}, {capabilities?.formats.eps.supported ? 'available' : 'unavailable'}.</div>
                 {analysis && <div className="aa-quality-panel">
                   <p className="aa-eyebrow">SOURCE / UPSCALE QUALITY COMPARISON</p>
                   <div><span>Measured source PPI at canvas</span><strong>{analysis.source_ppi_at_canvas.horizontal} × {analysis.source_ppi_at_canvas.vertical}</strong></div>
@@ -967,20 +998,26 @@ function App() {
         )}
 
         {stage === 6 && (
-          <section className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">EDITOR / SOURCE REVIEW</p><h2>Separate artboards are available only from actual engine output</h2></div><span className="aa-meta">{job?.job_id ?? 'NO JOB'}</span></div>
+          <section className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">VECTOR OUTPUT / REVIEW</p><h2>Separate front and back artwork outputs</h2></div><span className="aa-meta">{job?.job_id ?? 'NO JOB'}</span></div>
             <div className="aa-pair" style={{ padding: 14 }}>
               {([['front-body', 'FRONT'], ['back-body', 'BACK']] as const).map(([prefix, side]) => {
                 const svgName = `${prefix}.svg` as OutputName;
                 const pngName = `${prefix}-preview.png` as OutputName;
+                const sidePrefix = prefix.startsWith('front') ? 'front' : 'back';
+                const draftName = `${sidePrefix}-flat-art-draft.png` as OutputName;
                 const imageName = previewUrls[svgName] ? svgName : pngName;
                 const imageUrl = previewUrls[imageName];
+                const draftUrl = previewUrls[draftName];
                 return <article key={prefix} className="aa-card">
-                <div className="aa-card-head"><div><p className="aa-eyebrow">{side} / ENGINE OUTPUT</p><h2>{imageUrl ? imageName : `${prefix} · no preview returned`}</h2></div>{imageUrl && <a className="aa-btn secondary" href={imageUrl} download={imageName}><Download size={13} /> Download</a>}</div>
-                {imageUrl ? <div className="aa-output-preview"><img src={imageUrl} alt={`${side.toLowerCase()} artwork returned by the engine`} /></div> : <div className="aa-canvas-empty"><div><strong>No preview file available</strong>The engine did not return an SVG or rendered preview image for this side.</div></div>}
+                <div className="aa-card-head"><div><p className="aa-eyebrow">{side} / ENGINE OUTPUT</p><h2>{imageUrl ? prefix : `${prefix} · no preview returned`}</h2></div>{imageUrl && <a className="aa-btn secondary" href={imageUrl} download={imageName}><Download size={13} /> Download</a>}</div>
+                <div style={{ display: 'grid', gap: 12, padding: 12 }}>
+                  {draftUrl && <div><div className="aa-inline" style={{ justifyContent: 'space-between', marginBottom: 8 }}><span className="aa-meta">AI FLAT-ART DRAFT · REVIEW</span><a className="aa-btn secondary" href={draftUrl} download={draftName}><Download size={13} /> Download draft</a></div><div className="aa-output-preview"><img src={draftUrl} alt={`${side.toLowerCase()} AI-generated flat-art draft`} /></div></div>}
+                  {imageUrl ? <div><p className="aa-meta">VECTORIZED OUTPUT PREVIEW</p><div className="aa-output-preview"><img src={imageUrl} alt={`${side.toLowerCase()} vector artwork rendered by the engine`} /></div></div> : <div className="aa-canvas-empty"><div><strong>No vector preview returned</strong>The engine did not return an SVG or rendered preview image for this side.</div></div>}
+                </div>
                 </article>;
               })}
             </div>
-            <div style={{ padding: '0 14px 14px' }}><div className="aa-note">This review surface displays the engine’s real rendered preview files only. It does not provide object-level editing or fabricate editable layers. Use SVG/EPS in a compatible design application for editing.</div></div>
+            <div style={{ padding: '0 14px 14px' }}><div className="aa-note">These are real engine outputs: the PNG draft (when requested) and a render of the vector file. This page is not a node/layer editor. Download SVG/EPS for editing in a compatible design application.</div></div>
             <div className="aa-controls" style={{ padding: '0 14px 14px' }}><button className="aa-btn secondary" type="button" onClick={() => setCurrentStage(5)}><ArrowLeft size={14} /> Validation</button><button className="aa-btn" type="button" onClick={() => { setStage(7); setHighestStage((current) => Math.max(current, 7)); }}>Export files <ArrowRight size={14} /></button></div>
           </section>
         )}
