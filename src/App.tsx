@@ -4,6 +4,7 @@ import {
   engineApi,
   type ArtworkJob,
   type CreateArtworkJobRequest,
+  type CreateGeneratedArtworkRequest,
   type DetectionCandidate,
   type DetectionResult,
   type EngineCapabilities,
@@ -13,7 +14,10 @@ import {
 } from '@/lib/engine-api';
 import { useAccessControl } from '@/components/access-gate';
 
-const STEPS = ['Upload', 'Analysis', 'Detection', 'Vectorization', 'Validation', 'Editor', 'Export'];
+const CLIP_STEPS = ['Input', 'Analyze', 'Detection', 'Flat artwork', 'Auto trace', 'Vectorize', 'Validation', 'Review', 'Export'];
+const GENERATION_STEPS = ['Brief', 'AI artwork', 'Auto trace', 'Vectorize', 'Validation', 'Review', 'Export'];
+const CLIP_STAGE_MAP = [0, 1, 2, 3, 4, 4, 5, 6, 7];
+const GENERATION_STAGE_MAP = [0, 4, 4, 4, 5, 6, 7];
 const ALLOWED_FILE_NAMES = [
   'front-body.svg',
   'front-body.eps',
@@ -33,6 +37,29 @@ function normalizedStatus(status?: string) {
   return status?.toLowerCase() ?? '';
 }
 
+function suggestedAssignments(result: DetectionResult): Record<string, SideAssignment> {
+  const assignments: Record<string, SideAssignment> = {};
+  for (const candidate of result.candidates) {
+    if (candidate.suggested_side === 'front' || candidate.suggested_side === 'back') {
+      assignments[candidate.candidate_id] = candidate.suggested_side;
+    }
+  }
+  return assignments;
+}
+
+function describeJobStage(job: ArtworkJob) {
+  const stage = job.stage?.toLowerCase() ?? '';
+  if (stage === 'ai_generate_front') return 'AI is creating the front artwork…';
+  if (stage === 'ai_generate_back') return 'AI is creating the back artwork…';
+  if (stage === 'queued_generation') return 'Waiting for the artwork engine…';
+  if (stage.includes(':extract')) return `Preparing the ${stage.split(':')[0]} panel…`;
+  if (stage.includes(':ocr')) return `Reading text on the ${stage.split(':')[0]} panel…`;
+  if (stage.includes(':trace')) return `Auto-tracing the ${stage.split(':')[0]} panel…`;
+  if (stage.includes(':vectorize')) return `Vector paths are ready for the ${stage.split(':')[0]} panel…`;
+  if (stage.includes(':export')) return `Writing the ${stage.split(':')[0]} output files…`;
+  return job.error?.message || job.stage || job.status;
+}
+
 function JerseyMark() {
   return (
     <svg className="aa-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true">
@@ -49,7 +76,7 @@ function LoadingScreen() {
         <JerseyMark />
         <h1>Artboard Ai</h1>
         <p>Connecting to the artwork engine and reading its current capabilities.</p>
-        <div className="aa-loading-line" aria-hidden="true"><span /></div>
+        <div className="aa-job-state" style={{ justifyContent: 'center' }}><StatusDot state="pending" />Waiting for the live engine response</div>
         <p className="aa-eyebrow" style={{ margin: '16px 0 0' }}>JERSEY OS / ENGINE CHECK</p>
       </section>
     </main>
@@ -82,7 +109,7 @@ function Header({ capabilities, engineState }: { capabilities: EngineCapabilitie
       <div className="aa-system" aria-label="Engine capability status">
         <div className="aa-status"><StatusDot state={engineState === 'ready' ? 'ready' : engineState === 'loading' ? 'pending' : 'off'} /><span className="aa-status-copy"><span className="aa-status-label">Artwork engine</span><span className={`aa-status-value ${engineState === 'ready' ? 'ready' : ''}`}>{engineState === 'ready' ? capabilities?.engine ?? 'Available' : engineState === 'loading' ? 'Checking' : 'Unavailable'}</span></span></div>
         <div className="aa-status"><StatusDot state={capabilities ? (aiReady ? 'ready' : 'pending') : 'off'} /><span className="aa-status-copy"><span className="aa-status-label">AI assistance</span><span className="aa-status-value">{capabilities ? (aiReady ? 'Configured · opt-in' : 'Not configured') : 'Unknown'}</span></span></div>
-        <div className="aa-status"><StatusDot state={capabilities?.formats.ai.supported ? 'ready' : 'off'} /><span className="aa-status-copy"><span className="aa-status-label">Native .ai</span><span className="aa-status-value">{capabilities ? (capabilities.formats.ai.supported ? 'Supported' : 'Unavailable') : 'Unknown'}</span></span></div>
+        <div className="aa-status"><StatusDot state={capabilities?.formats.ai.supported ? 'ready' : 'off'} /><span className="aa-status-copy"><span className="aa-status-label">Native .ai</span><span className="aa-status-value">{capabilities?.formats.ai.supported ? 'Supported' : 'Unavailable'}</span></span></div>
       </div>
       <div className="aa-header-end">
         <div className="aa-connection"><StatusDot state={engineState === 'ready' ? 'ready' : engineState === 'loading' ? 'pending' : 'off'} />{engineState === 'ready' ? 'ENGINE CONNECTED' : engineState === 'loading' ? 'CONNECTING' : 'ENGINE OFFLINE'}</div>
@@ -107,15 +134,31 @@ function Header({ capabilities, engineState }: { capabilities: EngineCapabilitie
   );
 }
 
-function WorkflowNav({ stage, highestStage, onNavigate }: { stage: number; highestStage: number; onNavigate: (step: number) => void }) {
+function WorkflowNav({ stage, highestStage, onNavigate, mode, job }: { stage: number; highestStage: number; onNavigate: (step: number) => void; mode: 'clip' | 'generate' | null; job: ArtworkJob | null }) {
+  const steps = mode === 'generate' ? GENERATION_STEPS : CLIP_STEPS;
+  const stageMap = mode === 'generate' ? GENERATION_STAGE_MAP : CLIP_STAGE_MAP;
+  let activeIndex = stageMap.indexOf(stage);
+  if (stage === 4 && job) {
+    const jobStage = job.stage?.toLowerCase() ?? '';
+    if (mode === 'generate') {
+      activeIndex = jobStage.startsWith('ai_generate') || jobStage === 'queued_generation'
+        ? 1
+        : jobStage.includes(':vectorize') || jobStage.includes(':export') || DOWNLOADABLE_JOB_STATUSES.has(normalizedStatus(job.status))
+          ? 3 : 2;
+    } else {
+      activeIndex = jobStage.includes(':vectorize') || jobStage.includes(':export') || DOWNLOADABLE_JOB_STATUSES.has(normalizedStatus(job.status))
+        ? 5 : 4;
+    }
+  }
   return (
     <nav className="aa-workflow" aria-label="Artwork workflow stages">
-      {STEPS.map((label, index) => {
+      {steps.map((label, index) => {
+        const stageIndex = stageMap[index];
         const number = index + 1;
-        const reachable = index <= highestStage;
+        const reachable = stageIndex <= highestStage;
         return (
-          <button key={label} type="button" className={`aa-step${stage === index ? ' active' : ''}${stage > index ? ' complete' : ''}`} aria-current={stage === index ? 'step' : undefined} disabled={!reachable} onClick={() => onNavigate(index)}>
-            <span className="aa-step-index">{stage > index ? <Check size={12} /> : String(number).padStart(2, '0')}</span>
+          <button key={label} type="button" className={`aa-step${activeIndex === index ? ' active' : ''}${activeIndex > index ? ' complete' : ''}`} aria-current={activeIndex === index ? 'step' : undefined} disabled={!reachable} onClick={() => onNavigate(stageIndex)}>
+            <span className="aa-step-index">{activeIndex > index ? <Check size={12} /> : String(number).padStart(2, '0')}</span>
             <span className="aa-step-label">{label}</span>
           </button>
         );
@@ -130,6 +173,10 @@ function App() {
   const [capabilityError, setCapabilityError] = useState('');
   const [stage, setStage] = useState(0);
   const [highestStage, setHighestStage] = useState(0);
+  const [workflowMode, setWorkflowMode] = useState<'clip' | 'generate' | null>(null);
+  const [generationBrief, setGenerationBrief] = useState('');
+  const [frontNotes, setFrontNotes] = useState('');
+  const [backNotes, setBackNotes] = useState('');
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [localPreview, setLocalPreview] = useState('');
   const [uploadedSource, setUploadedSource] = useState<UploadedSource | null>(null);
@@ -160,11 +207,12 @@ function App() {
     setEngineState('loading');
     setCapabilityError('');
     const started = Date.now();
-    const responsePromise = engineApi.getCapabilities();
-    const minimumDisplay = new Promise<void>((resolve) => window.setTimeout(resolve, Math.max(0, 4000 - (Date.now() - started))));
+    const minimumDisplay = new Promise<void>((resolve) => window.setTimeout(
+      resolve,
+      Math.max(0, 3500 - (Date.now() - started)),
+    ));
     try {
-      const response = await responsePromise;
-      await minimumDisplay;
+      const [response] = await Promise.all([engineApi.getCapabilities(), minimumDisplay]);
       setCapabilities(response);
       setFormats([
         ...(response.formats.svg.supported ? ['svg' as const] : []),
@@ -208,8 +256,8 @@ function App() {
         if (!TERMINAL_JOB_STATUSES.has(normalizedStatus(response.status))) {
           timer = window.setTimeout(() => void poll(), 1400);
         } else if (DOWNLOADABLE_JOB_STATUSES.has(normalizedStatus(response.status))) {
-          setStage((current) => current < 4 ? 4 : current);
-          setHighestStage((current) => Math.max(current, 4));
+          setStage((current) => current < 5 ? 5 : current);
+          setHighestStage((current) => Math.max(current, 5));
         }
       } catch (reason) {
         if (cancelled) return;
@@ -259,6 +307,16 @@ function App() {
 
   function setCurrentStage(next: number) {
     if (next <= highestStage) setStage(next);
+    setError('');
+  }
+
+  function chooseWorkflow(mode: 'clip' | 'generate') {
+    setWorkflowMode(mode);
+    setStage(0);
+    setHighestStage(0);
+    setJob(null);
+    setAvailableFiles([]);
+    setPreviewUrls({});
     setError('');
   }
 
@@ -360,7 +418,7 @@ function App() {
       setBusy('detect');
       const result = await engineApi.detectPanels(sourceId, aiEnabled);
       setDetection(result);
-      setAssignments({});
+      setAssignments(suggestedAssignments(result));
       setSelectedCandidate(result.candidates[0]?.candidate_id ?? '');
       setHighestStage((current) => Math.max(current, 2));
       setStage(2);
@@ -384,7 +442,7 @@ function App() {
       setManualCandidates([]);
       setManualMode(false);
       setManualBox(null);
-      setAssignments({});
+      setAssignments(suggestedAssignments(result));
       setSelectedCandidate(result.candidates[0]?.candidate_id ?? '');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Panel detection failed.');
@@ -492,10 +550,35 @@ function App() {
     try {
       const created = await engineApi.createJob(payload);
       setJob(created);
-      setStage(3);
-      setHighestStage((current) => Math.max(current, 3));
+      setStage(4);
+      setHighestStage((current) => Math.max(current, 4));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'The artwork job could not be created.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function createGeneratedArtworkJob() {
+    if (!capabilities?.ai_artwork_generation?.configured || !generationBrief.trim() || formats.length === 0) return;
+    const payload: CreateGeneratedArtworkRequest = {
+      brief: generationBrief.trim(),
+      front_notes: frontNotes.trim(),
+      back_notes: backNotes.trim(),
+      dpi,
+      formats,
+    };
+    setBusy('job');
+    setError('');
+    setPollError('');
+    setJob(null);
+    try {
+      const created = await engineApi.createGeneratedJob(payload);
+      setJob(created);
+      setStage(4);
+      setHighestStage((current) => Math.max(current, 4));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The generated artwork job could not be created.');
     } finally {
       setBusy('');
     }
@@ -538,32 +621,81 @@ function App() {
   }
 
   const canStartJob = Boolean(frontCandidate && backCandidate && formats.length > 0);
+  const generationConfigured = capabilities?.ai_artwork_generation?.configured ?? false;
   const jobFailed = job && ['failed', 'cancelled', 'canceled'].includes(normalizedStatus(job.status));
   const jobComplete = job && DOWNLOADABLE_JOB_STATUSES.has(normalizedStatus(job.status));
   const awaitingDesktop = normalizedStatus(job?.status) === 'awaiting_desktop';
-  const maxWidth = capabilities?.canvas.width_inches;
-  const maxHeight = capabilities?.canvas.height_inches;
-
   if (engineState === 'loading') return <LoadingScreen />;
 
   return (
     <main className="aa-app">
       <Header capabilities={capabilities} engineState={engineState} />
       <div className="aa-workspace">
-        <WorkflowNav stage={stage} highestStage={highestStage} onNavigate={setCurrentStage} />
+        {workflowMode && <WorkflowNav stage={stage} highestStage={highestStage} mode={workflowMode} job={job} onNavigate={setCurrentStage} />}
         <div className="aa-heading">
           <div>
             <p className="aa-kicker">ARTBOARD AI / JERSEY OS</p>
-            <h1 className="aa-title">{STEPS[stage] === 'Upload' ? 'One source photo. Two separate canvases.' : STEPS[stage] === 'Analysis' ? 'Reading the source image' : STEPS[stage] === 'Detection' ? 'Confirm the two panel regions' : STEPS[stage] === 'Vectorization' ? 'Artwork job' : STEPS[stage] === 'Validation' ? 'Review the engine report' : STEPS[stage] === 'Editor' ? 'Review the generated artwork' : 'Download available files'}</h1>
-            <p className="aa-subtitle">{STEPS[stage] === 'Upload' ? 'Upload one photo showing both jersey sides. Local geometry proposes regions; you assign front and back before processing.' : 'Every status, measurement, preview and file below is returned by the connected engine. No printer approval is performed.'}</p>
+            <h1 className="aa-title">{!workflowMode ? 'Two routes. One production review.' : workflowMode === 'generate' && stage === 0 ? 'Describe the artwork you need.' : workflowMode === 'clip' && stage === 0 ? 'One source photo. Two separate canvases.' : stage === 1 ? 'Reading the source image' : stage === 2 ? 'Confirm front and back regions' : stage === 3 ? 'Review flat artwork crops' : stage === 4 ? (job ? (workflowMode === 'generate' ? 'Generate, trace, and vectorize' : 'Auto-trace and vectorize') : 'Prepare artwork paths') : stage === 5 ? 'Review the engine report' : stage === 6 ? 'Inspect both sides' : 'Download available files'}</h1>
+            <p className="aa-subtitle">{!workflowMode ? 'Choose whether to extract visible artwork from a photo or generate a new front-and-back design from a brief.' : workflowMode === 'clip' && stage === 0 ? 'Upload one photo showing both jersey sides. The engine analyzes the photo and suggests regions; confirm front and back before reviewing their crop previews.' : workflowMode === 'generate' && stage === 0 ? 'Generate separate front and back raster artwork from your written direction. The engine traces those images to paths; review all returned output.' : stage === 3 ? 'Each selected region is previewed as a rectangle. This is not fabric dewarping; folds and hidden artwork are not reconstructed.' : 'Every status, measurement, preview and file below is returned by the connected engine. No printer approval is performed.'}</p>
           </div>
-          <div className="aa-meta">{capabilities ? <>{capabilities.engine} · {capabilities.version}<br />{maxWidth} × {maxHeight} IN · {capabilities.canvas.color_mode}</> : 'ENGINE CAPABILITIES UNAVAILABLE'}</div>
+          <div className="aa-meta">{capabilities ? <>{capabilities.engine} · {capabilities.version}<br />22 × 31 IN · CMYK · PER SIDE</> : 'ENGINE CAPABILITIES UNAVAILABLE'}</div>
         </div>
 
         {engineState === 'offline' && <ErrorMessage message={capabilityError || 'The engine is offline. Connect it to begin.'} onRetry={() => void checkCapabilities()} />}
         {error && <ErrorMessage message={error} onRetry={undefined} />}
 
-        {stage === 0 && (
+        {stage === 0 && !workflowMode && (
+          <section className="aa-mode-grid" aria-label="Choose artwork workflow">
+            <button type="button" className="aa-mode-card" onClick={() => chooseWorkflow('clip')}>
+              <span className="aa-mode-index">01 / EXTRACT</span><ScanLine size={22} />
+              <h2>Rebuild visible artwork</h2>
+              <p>Start with one uploaded photo showing both jersey sides. Confirm front and back regions, compare crop quality, then send the visible artwork through engine tracing.</p>
+              <span className="aa-mode-link">Use a source photo <ArrowRight size={15} /></span>
+            </button>
+            <button type="button" className={`aa-mode-card${capabilities && !generationConfigured ? ' unavailable' : ''}`} onClick={() => { if (!capabilities || generationConfigured) chooseWorkflow('generate'); }} disabled={Boolean(capabilities && !generationConfigured)}>
+              <span className="aa-mode-index">02 / GENERATE</span><FileImage size={22} />
+              <h2>Create from a brief</h2>
+              <p>Write a design brief and separate front/back direction. The configured artwork engine generates both sides, then traces the raster into reviewable vector files.</p>
+              <span className="aa-mode-link">{!capabilities ? 'Check engine connection' : generationConfigured ? 'Write a design brief' : 'Generation not configured in live engine capabilities'} <ArrowRight size={15} /></span>
+            </button>
+            <div className="aa-production-strip">
+              <strong>PRODUCTION FRAME</strong>
+              <span>Two individual 22 × 31 in CMYK artboards</span>
+              <span>EPSF 3.0 · PostScript Level 2 · 330 / 600 DPI for raster content only</span>
+              <span>Engine validation is not printer approval · native .ai unavailable</span>
+            </div>
+          </section>
+        )}
+
+        {workflowMode === 'generate' && stage === 0 && (
+          <section className="aa-split">
+            <div className="aa-card">
+              <div className="aa-card-head"><div><p className="aa-eyebrow">GENERATIVE ARTWORK / ENGINE CAPABILITY</p><h2>Specify a matched jersey set</h2></div><span className="aa-meta">{generationConfigured ? 'CONFIGURED' : 'NOT CONFIGURED'}</span></div>
+              {generationConfigured ? (
+                <div className="aa-generation-form">
+                  <label className="aa-field">Design brief<textarea className="aa-textarea" value={generationBrief} onChange={(event) => setGenerationBrief(event.currentTarget.value)} minLength={10} maxLength={4000} placeholder="Describe the visual direction, palette, motifs, placement, and any constraints." /></label>
+                  <div className="aa-pair">
+                    <label className="aa-field">Front-specific direction<textarea className="aa-textarea compact" value={frontNotes} onChange={(event) => setFrontNotes(event.currentTarget.value)} maxLength={800} placeholder="Front placement, marks, text, or details." /></label>
+                    <label className="aa-field">Back-specific direction<textarea className="aa-textarea compact" value={backNotes} onChange={(event) => setBackNotes(event.currentTarget.value)} maxLength={800} placeholder="Back placement, number/name, and details." /></label>
+                  </div>
+                  <div className="aa-note warn">Generation returns raster artwork which is traced to paths. Inspect the generated images and vector result; paths may need correction. Hidden source artwork is not applicable or recoverable.</div>
+                  <div className="aa-field"><span>Raster content resolution · DPI does not set vector path resolution</span><div className="aa-inline">{([330, 600] as const).map((value) => <button key={value} type="button" className={`aa-btn ${dpi === value ? '' : 'secondary'}`} aria-pressed={dpi === value} onClick={() => setDpi(value)}>{value} DPI</button>)}</div></div>
+                  <div className="aa-field"><span>Export formats</span><div className="aa-inline">{(['svg', 'eps'] as const).map((format) => {
+                    const supported = capabilities?.formats[format].supported ?? false;
+                    const checked = formats.includes(format);
+                    return <label key={format} className="aa-note aa-choice"><input type="checkbox" checked={checked && supported} disabled={!supported} onChange={() => setFormats((current) => checked ? current.filter((item) => item !== format) : [...current, format])} />{format.toUpperCase()} · {supported ? capabilities?.formats[format].color_space : 'unavailable'}</label>;
+                  })}</div></div>
+                  <div className="aa-controls"><button className="aa-btn secondary" type="button" onClick={() => { setWorkflowMode(null); setStage(0); }}>Choose another workflow</button><button className="aa-btn" type="button" disabled={generationBrief.trim().length < 10 || !formats.length || Boolean(busy)} onClick={() => void createGeneratedArtworkJob()}>{busy === 'job' ? <><LoaderCircle size={14} /> Submitting to engine</> : <>Generate both sides <ArrowRight size={14} /></>}</button></div>
+                </div>
+              ) : <div className="aa-generation-block"><div className="aa-canvas-empty"><div><strong>{capabilities ? 'Artwork generation is not configured' : 'Generation capability is unknown'}</strong>{capabilities ? 'This mode is blocked because the live capabilities response reports ai_artwork_generation.configured as false.' : 'Connect to the engine and load live capabilities before submitting a generation request.'}</div></div><button type="button" className="aa-btn secondary" onClick={() => { setWorkflowMode(null); setStage(0); }}>Choose another workflow</button></div>}
+            </div>
+            <aside className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">DELIVERABLE CONTRACT</p><h2>Two traced artboards</h2></div><ShieldCheck size={16} color="#f2c477" /></div>
+              <div className="aa-production-details"><div className="aa-note">Front and back are specified as separate 22 × 31 inch CMYK artboards.</div><div className="aa-note">Client EPS target: EPSF 3.0 / PostScript Level 2. Live engine reports: {capabilities?.formats.eps.standard ?? 'not reported'}.</div><div className="aa-note">Generated pixels are traced to vector paths. Review output; no automatic approval.</div><div className="aa-note warn">No native .ai file, printer approval, or guarantee of hidden/detail reconstruction.</div></div>
+            </aside>
+          </section>
+        )}
+
+        {stage === 0 && workflowMode === 'clip' && (
           <section className="aa-card" aria-label="Upload source image">
             <div className="aa-card-head"><div><p className="aa-eyebrow">SOURCE IMAGE / REQUIRED</p><h2>One combined jersey photo</h2></div><span className="aa-meta">FRONT + BACK IN ONE FRAME</span></div>
             <input ref={inputRef} className="aa-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/tiff,.tif,.tiff" aria-label="Choose source image" data-testid="input-source-image" onChange={(event) => acceptFile(event.currentTarget.files?.[0])} />
@@ -583,7 +715,7 @@ function App() {
             <div className="aa-note" style={{ margin: '0 17px 15px' }}>
               {capabilities ? `Engine limits: ${uploadLimit} MiB${megapixelLimit ? ` · ${megapixelLimit} megapixels` : ''}. Source dimensions and format are confirmed by the engine after upload.` : 'Waiting for engine capabilities. Upload is unavailable until the engine responds.'}
             </div>
-            <div className="aa-note warn" style={{ margin: '0 17px 15px' }}>Development preview: there are no account-level access or retention controls yet. Do not upload confidential production artwork until those controls are configured.</div>
+        <div className="aa-note warn" style={{ margin: '0 17px 15px' }}>One photo is used as a flat source. Crops are rectangular previews—not fold dewarping. Artwork hidden by folds, sleeves, or occlusion cannot be recovered by this workflow.</div>
             <div className="aa-controls" style={{ padding: '0 17px 17px' }}>
               {capabilities?.ai_assistance.configured ? (
                 <label className="aa-note" style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 440 }}>
@@ -595,6 +727,7 @@ function App() {
                 {busy === 'upload' ? <><LoaderCircle size={14} /> Uploading source</> : busy === 'detect' ? <><LoaderCircle size={14} /> Finding geometry</> : <>Upload and inspect <ArrowRight size={14} /></>}
               </button>
             </div>
+            <div style={{ padding: '0 17px 17px' }}><button type="button" className="aa-btn ghost" onClick={() => { setWorkflowMode(null); setError(''); }}>Choose another workflow</button></div>
           </section>
         )}
 
@@ -616,8 +749,8 @@ function App() {
             <aside className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">NO SEMANTIC CLASSIFICATION</p><h2>Operator confirmation</h2></div><ShieldCheck size={16} color="#f2c477" /></div>
               <div style={{ display: 'grid', gap: 12, padding: 16 }}>
                 {analysis && <div className="aa-note">The engine returned {analysis.width_px} × {analysis.height_px} px, approximately {analysis.source_ppi_at_canvas.horizontal} × {analysis.source_ppi_at_canvas.vertical} PPI at the configured canvas size.</div>}
-                <div className="aa-note warn">Local detection identifies geometric regions only. It cannot tell which garment is front or back; you will assign both sides yourself.</div>
-                <div className="aa-note">Fabric flattening and hidden-artwork reconstruction are not automatic. AI setup is unavailable unless the capabilities response says it is configured.</div>
+                <div className="aa-note warn">{useAiAssistance ? 'Opt-in AI analysis and front/back suggestions run next. Suggestions require your confirmation; confidence is not independently calibrated.' : 'Local detection identifies geometric regions only. It does not classify front versus back; enable configured AI assistance if you want side suggestions.'}</div>
+                <div className="aa-note">Fabric flattening and hidden-artwork reconstruction are not automatic. AI assistance remains opt-in and is only available when the engine reports it configured.</div>
               </div>
             </aside>
           </section>
@@ -631,7 +764,7 @@ function App() {
               <>
                 <div className="aa-split">
                   <section className="aa-card">
-                    <div className="aa-card-head"><div><p className="aa-eyebrow">GEOMETRY ONLY · {detection.method}</p><h2>Uploaded source with returned regions</h2></div><span className="aa-meta">{detection.source_dimensions.width_px} × {detection.source_dimensions.height_px} PX</span></div>
+                    <div className="aa-card-head"><div><p className="aa-eyebrow">{detection.front_back_classified ? 'AI FRONT / BACK SUGGESTIONS · VERIFY' : `GEOMETRY ONLY · ${detection.method}`}</p><h2>Uploaded source with returned regions</h2></div><span className="aa-meta">{detection.source_dimensions.width_px} × {detection.source_dimensions.height_px} PX</span></div>
                     <div className="aa-image-stage">
                       <img className="aa-source-image" src={engineApi.sourcePreviewUrl(uploadedSource.source_id)} alt="Uploaded source photo with engine candidates and any operator-drawn crop overlays" />
                       <svg
@@ -661,7 +794,7 @@ function App() {
                     </div>
                   </section>
                   <aside className="aa-card">
-                    <div className="aa-card-head"><div><p className="aa-eyebrow">MANUAL SIDE ASSIGNMENT</p><h2>{regionCandidates.length} panel regions</h2></div><span className="aa-meta">{detection.status}</span></div>
+                    <div className="aa-card-head"><div><p className="aa-eyebrow">{detection.front_back_classified ? 'AI-SUGGESTED SIDE · OPERATOR CONFIRMATION' : 'MANUAL SIDE ASSIGNMENT'}</p><h2>{regionCandidates.length} panel regions</h2></div><span className="aa-meta">{detection.status}</span></div>
                     <div className="aa-region-list">
                       {regionCandidates.map((candidate, index) => (
                         <div className={`aa-region${selectedCandidate === candidate.candidate_id ? ' selected' : ''}`} key={candidate.candidate_id}>
@@ -675,7 +808,7 @@ function App() {
                       {regionCandidates.length === 0 && <div className="aa-canvas-empty"><div><strong>No candidate regions returned</strong>The engine found no geometric regions. Draw a crop on the source image to define one manually.</div></div>}
                     </div>
                     <div style={{ padding: '0 14px 14px' }}>
-                      <div className="aa-note warn">Local detection does not classify front/back. Assign exactly one region to each side. Detector bounds come from the engine; manual bounds are drawn by you.</div>
+                    <div className="aa-note warn">{detection.front_back_classified ? 'AI suggested and prefilled front/back assignments. Verify every region before continuing; model confidence is not independently calibrated.' : 'The returned regions do not include a reliable front/back pair. Assign exactly one region to each side. Crop previews remain rectangular; they do not unwrap fabric folds or recover hidden artwork.'}</div>
                       <button type="button" className="aa-btn secondary" aria-pressed={manualMode} style={{ marginTop: 10 }} onClick={() => { setManualMode((current) => !current); setManualBox(null); manualStart.current = null; setError(''); }}>
                         {manualMode ? <><X size={13} /> Cancel drawing</> : <><ScanLine size={13} /> Draw a panel region on the image</>}
                       </button>
@@ -708,7 +841,7 @@ function App() {
                   <button type="button" className="aa-btn secondary" disabled={Boolean(busy)} onClick={() => setCurrentStage(0)}><ArrowLeft size={14} /> Change source</button>
                   <div className="aa-control-right">
                     <button type="button" className="aa-btn secondary" disabled={Boolean(busy)} onClick={() => void rerunDetection()}>{busy === 'detect' ? <LoaderCircle size={14} /> : <RotateCcw size={14} />} Detect again</button>
-                    <button type="button" className="aa-btn" disabled={!canStartJob || formats.length === 0} onClick={() => { setStage(3); setHighestStage((current) => Math.max(current, 3)); }} data-testid="button-continue-vectorize">Review vectorization settings <ArrowRight size={14} /></button>
+                    <button type="button" className="aa-btn" disabled={!canStartJob || formats.length === 0} onClick={() => { setStage(3); setHighestStage((current) => Math.max(current, 3)); }}>Review flat artwork <ArrowRight size={14} /></button>
                   </div>
                 </div>
               </>
@@ -716,13 +849,51 @@ function App() {
           </section>
         )}
 
-        {stage === 3 && (
+        {stage === 3 && workflowMode === 'clip' && (
+          <section className="aa-card">
+            <div className="aa-card-head"><div><p className="aa-eyebrow">RECTANGULAR CROP REVIEW</p><h2>Separate front and back source artwork</h2></div><span className="aa-meta">NO FOLD DEWARPING</span></div>
+            {uploadedSource && detection ? (
+              <div className="aa-pair aa-crop-pair">
+                {([
+                  ['Front', frontCandidate],
+                  ['Back', backCandidate],
+                ] as const).map(([side, candidate]) => (
+                  <div className="aa-crop-preview-card" key={side}>
+                    <div className="aa-crop-preview" style={{ aspectRatio: candidate ? `${candidate.source_bbox_px.width} / ${candidate.source_bbox_px.height}` : '4 / 3' }}>
+                      {previewUrl && candidate && <img
+                        src={previewUrl}
+                        alt={`${side} rectangular crop preview`}
+                        style={{
+                          width: `${(detection.source_dimensions.width_px / candidate.source_bbox_px.width) * 100}%`,
+                          height: `${(detection.source_dimensions.height_px / candidate.source_bbox_px.height) * 100}%`,
+                          left: `${(-candidate.source_bbox_px.x / candidate.source_bbox_px.width) * 100}%`,
+                          top: `${(-candidate.source_bbox_px.y / candidate.source_bbox_px.height) * 100}%`,
+                        }}
+                      />}
+                      {!candidate && <span>Assign a {side.toLowerCase()} crop in Detection</span>}
+                    </div>
+                    <span className="aa-meta">{side.toUpperCase()} · {candidate ? `${candidate.source_bbox_px.width} × ${candidate.source_bbox_px.height} PX` : 'NOT ASSIGNED'}</span>
+                  </div>
+                ))}
+              </div>
+            ) : <div className="aa-canvas-empty"><div><strong>Flat artwork preview unavailable</strong>Return to Detection and confirm both source regions before continuing.</div></div>}
+            <div style={{ padding: '0 14px 14px' }}>
+              <div className="aa-note warn">These are rectangular source crops, not de-warped fabric or reconstructed artwork. Engine processing fits the visible pixels onto the configured canvas; folds, sleeves and occluded details can still distort or hide artwork.</div>
+            </div>
+            <div className="aa-controls" style={{ padding: '0 14px 14px' }}>
+              <button type="button" className="aa-btn secondary" onClick={() => setCurrentStage(2)}><ArrowLeft size={14} /> Adjust regions</button>
+              <button type="button" className="aa-btn" disabled={!canStartJob || formats.length === 0} onClick={() => { setStage(4); setHighestStage((current) => Math.max(current, 4)); }}>Review trace settings <ArrowRight size={14} /></button>
+            </div>
+          </section>
+        )}
+
+        {stage === 4 && (
           <section className="aa-split">
             <div className="aa-card">
               <div className="aa-card-head"><div><p className="aa-eyebrow">ENGINE JOB</p><h2>{job ? `Job ${job.job_id}` : 'Prepare front and back vectors'}</h2></div>{job && <span className="aa-meta">{job.status}</span>}</div>
               {job ? (
                 <div style={{ padding: 15 }}>
-                  <div className="aa-job-state"><StatusDot state={jobFailed ? 'off' : jobComplete ? 'ready' : 'pending'} /><span>{job.error?.message || job.stage || job.status}</span></div>
+                  <div className="aa-job-state"><StatusDot state={jobFailed ? 'off' : jobComplete ? 'ready' : 'pending'} /><span>{describeJobStage(job)}</span></div>
                   {Number.isFinite(job.progress) && <><div className="aa-inline" style={{ justifyContent: 'space-between', marginTop: 13, color: '#9aabba', font: '9px var(--app-font-mono)' }}><span>ENGINE REPORTED PROGRESS</span><span>{job.progress}%</span></div><div className="aa-meter" role="progressbar" aria-label="Engine job progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={job.progress}><span style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} /></div></>}
                   {pollError && <ErrorMessage message={pollError} onRetry={() => void refreshJob()} />}
                   {jobFailed && <ErrorMessage message={job.error?.message || 'The engine job did not complete.'} onRetry={() => void refreshJob()} />}
@@ -759,15 +930,22 @@ function App() {
             <aside className="aa-card">
               <div className="aa-card-head"><div><p className="aa-eyebrow">LOCKED CANVAS RULES</p><h2>Engine specification</h2></div><LockKeyhole size={15} color="#8ddbc6" /></div>
               <div style={{ display: 'grid', gap: 8, padding: 14 }}>
-                <div className="aa-note">Front and back: {maxWidth} × {maxHeight} in · {capabilities?.canvas.color_mode ?? 'CMYK'} · physical size comes from current engine capabilities.</div>
-                <div className="aa-note">SVG: {capabilities?.formats.svg.supported ? 'supported' : 'unavailable'} · {capabilities?.formats.svg.color_space ?? 'not reported'} · EPS: {capabilities?.formats.eps.supported ? 'supported' : 'unavailable'} · {capabilities?.formats.eps.standard ?? 'not reported'}.</div>
-                <div className="aa-note warn">DPI describes a raster equivalent, not vector path resolution. No print approval, bleed, seam allowance, or cutting pattern is part of this workflow.</div>
+                <div className="aa-note">Separate front and back artboards: 22 × 31 in · CMYK. This client specification must be honored by the engine.</div>
+                <div className="aa-note">Trace mode: {capabilities?.processing.color_vector_tracing ? 'engine reports color vector tracing' : 'color vector tracing not reported'} · client EPS target EPSF 3.0 / PostScript Level 2; engine reports {capabilities?.formats.eps.standard ?? 'no EPS standard'} · SVG/EPS: {capabilities?.formats.svg.supported ? 'available' : 'unavailable'}, {capabilities?.formats.eps.supported ? 'available' : 'unavailable'}.</div>
+                {analysis && <div className="aa-quality-panel">
+                  <p className="aa-eyebrow">SOURCE / UPSCALE QUALITY COMPARISON</p>
+                  <div><span>Measured source PPI at canvas</span><strong>{analysis.source_ppi_at_canvas.horizontal} × {analysis.source_ppi_at_canvas.vertical}</strong></div>
+                  <div><span>Selected raster target</span><strong>{dpi} DPI</strong></div>
+                  <div><span>Sharpness heuristic · not a grade</span><strong>{analysis.sharpness_heuristic}</strong></div>
+                  <p>Compare source density with target before tracing. No upscaling operation is exposed by this job API; interpolation cannot restore missing detail.</p>
+                </div>}
+                <div className="aa-note warn">DPI applies to raster content only; it does not set vector path resolution. No print approval, bleed, seam allowance, or cutting pattern is included.</div>
               </div>
             </aside>
           </section>
         )}
 
-        {stage === 4 && (
+        {stage === 5 && (
           <section className="aa-split">
             <div className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">ENGINE RESULT / PREFLIGHT</p><h2>Returned report</h2></div><span className="aa-meta">{job?.status ?? 'No job'}</span></div>
               {job ? <pre className="aa-json">{JSON.stringify({ stage: job.stage, status: job.status, production_ready: job.production_ready, result: job.result, error: job.error }, null, 2)}</pre> : <div className="aa-canvas-empty"><div><strong>No artwork job</strong>Create a job after assigning both detected regions.</div></div>}
@@ -775,19 +953,20 @@ function App() {
             </div>
             <aside className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">REVIEW BOUNDARIES</p><h2>What this does not certify</h2></div><ShieldCheck size={15} color="#f2c477" /></div>
               <div style={{ display: 'grid', gap: 9, padding: 14 }}>
-                <div className="aa-note">Traced paths approximate the visible source; original fonts, designer layers, or obscured artwork are not reconstructed automatically.</div>
-                <div className="aa-note">Fabric flattening/reconstruction and printing approval are out of scope. Native .ai output is unsupported here.</div>
+                <div className="aa-note">Traced paths approximate visible source artwork; original fonts, designer layers, or obscured artwork are not reconstructed automatically.</div>
+                <div className="aa-note">Selected source crops are rectangular previews—not automatic fold dewarping. Hidden artwork cannot be recovered.</div>
+                <div className="aa-note">Fabric flattening and printing approval are out of scope. Native .ai output is unavailable.</div>
                 {job?.production_ready !== undefined && <div className="aa-job-state"><StatusDot state={job.production_ready ? 'ready' : 'pending'} />Engine production_ready: {String(job.production_ready)} · not printer approval</div>}
               </div>
             </aside>
             <div className="aa-controls" style={{ gridColumn: '1 / -1' }}>
-              <button className="aa-btn secondary" type="button" onClick={() => setCurrentStage(3)}><ArrowLeft size={14} /> Job status</button>
-              <div className="aa-control-right"><button className="aa-btn secondary" type="button" disabled={!jobComplete} onClick={() => { setStage(5); setHighestStage((current) => Math.max(current, 5)); }}>Open editor review</button><button className="aa-btn" type="button" disabled={!jobComplete} onClick={() => { setStage(6); setHighestStage((current) => Math.max(current, 6)); }}>Available exports <ArrowRight size={14} /></button></div>
+              <button className="aa-btn secondary" type="button" onClick={() => setCurrentStage(4)}><ArrowLeft size={14} /> Job status</button>
+              <div className="aa-control-right"><button className="aa-btn secondary" type="button" disabled={!jobComplete} onClick={() => { setStage(6); setHighestStage((current) => Math.max(current, 6)); }}>Open artwork review</button><button className="aa-btn" type="button" disabled={!jobComplete} onClick={() => { setStage(7); setHighestStage((current) => Math.max(current, 7)); }}>Available exports <ArrowRight size={14} /></button></div>
             </div>
           </section>
         )}
 
-        {stage === 5 && (
+        {stage === 6 && (
           <section className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">EDITOR / SOURCE REVIEW</p><h2>Separate artboards are available only from actual engine output</h2></div><span className="aa-meta">{job?.job_id ?? 'NO JOB'}</span></div>
             <div className="aa-pair" style={{ padding: 14 }}>
               {([['front-body', 'FRONT'], ['back-body', 'BACK']] as const).map(([prefix, side]) => {
@@ -802,11 +981,11 @@ function App() {
               })}
             </div>
             <div style={{ padding: '0 14px 14px' }}><div className="aa-note">This review surface displays the engine’s real rendered preview files only. It does not provide object-level editing or fabricate editable layers. Use SVG/EPS in a compatible design application for editing.</div></div>
-            <div className="aa-controls" style={{ padding: '0 14px 14px' }}><button className="aa-btn secondary" type="button" onClick={() => setCurrentStage(4)}><ArrowLeft size={14} /> Validation</button><button className="aa-btn" type="button" onClick={() => { setStage(6); setHighestStage((current) => Math.max(current, 6)); }}>Export files <ArrowRight size={14} /></button></div>
+            <div className="aa-controls" style={{ padding: '0 14px 14px' }}><button className="aa-btn secondary" type="button" onClick={() => setCurrentStage(5)}><ArrowLeft size={14} /> Validation</button><button className="aa-btn" type="button" onClick={() => { setStage(7); setHighestStage((current) => Math.max(current, 7)); }}>Export files <ArrowRight size={14} /></button></div>
           </section>
         )}
 
-        {stage === 6 && (
+        {stage === 7 && (
           <section className="aa-split">
             <div className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">OUTPUTS RETURNED BY ENGINE</p><h2>Available files</h2></div><span className="aa-meta">{availableFiles.length} FILES FOUND</span></div>
               {jobComplete ? availableFiles.length ? <div className="aa-export-list" style={{ padding: 14 }}>
@@ -823,11 +1002,11 @@ function App() {
               <div className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">BUNDLE</p><h2>Download returned bundle</h2></div><FileArchive size={16} color="#8ddbc6" /></div><div style={{ display: 'grid', gap: 10, padding: 14 }}><p className="aa-subtitle" style={{ margin: 0 }}>Bundle download is requested from the engine and enabled only after a completed job.</p><button className="aa-btn" type="button" disabled={!jobComplete || downloadBusy === 'bundle'} onClick={() => void downloadOutput('bundle')}>{downloadBusy === 'bundle' ? <LoaderCircle size={14} /> : <Download size={14} />} Download ZIP bundle</button>{error && <p className="aa-alert" role="alert">{error}</p>}</div></div>
               <div className="aa-card"><div className="aa-card-head"><div><p className="aa-eyebrow">UNAVAILABLE</p><h2>Native Illustrator file</h2></div><CircleAlert size={15} color="#f2c477" /></div><div style={{ padding: 14 }}><div className="aa-note warn">Native .ai is unsupported in this workflow. An EPS/SVG file is never renamed or represented as a native .ai document.</div></div></div>
             </aside>
-            <div className="aa-controls" style={{ gridColumn: '1 / -1' }}><button className="aa-btn secondary" type="button" onClick={() => setCurrentStage(5)}><ArrowLeft size={14} /> Editor review</button><span className="aa-meta">NO PRINTER APPROVAL · NO AUTOMATIC FABRIC RECONSTRUCTION</span></div>
+            <div className="aa-controls" style={{ gridColumn: '1 / -1' }}><button className="aa-btn secondary" type="button" onClick={() => setCurrentStage(6)}><ArrowLeft size={14} /> Artwork review</button><span className="aa-meta">NO PRINTER APPROVAL · NO AUTOMATIC FABRIC RECONSTRUCTION</span></div>
           </section>
         )}
 
-        <footer className="aa-footer"><span>ARTBOARD AI · A TOOL OF JERSEY OS</span><span>ONE SOURCE · TWO OPERATOR-ASSIGNED PANELS</span></footer>
+        <footer className="aa-footer"><span>ARTBOARD AI · A TOOL OF JERSEY OS</span><span>{workflowMode === 'generate' ? 'AI-DRAFTED · OPERATOR-REVIEWED' : 'ONE SOURCE · TWO SIDE ASSIGNMENTS CONFIRMED'}</span></footer>
       </div>
     </main>
   );

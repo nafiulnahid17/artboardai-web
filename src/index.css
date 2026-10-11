@@ -234,6 +234,35 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .aa-export-file span { flex:1; color:#dce7ed; font:9px var(--app-font-mono); }
 .aa-inline { display:flex; align-items:center; gap:8px; }
 .aa-field { display:grid; gap:6px; color:#8ea1b2; font-size:9px; }
+.aa-mode-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.aa-mode-card { position:relative; display:flex; min-height:270px; align-items:flex-start; flex-direction:column; padding:26px; border:1px solid rgba(111,242,199,.28); border-radius:13px; background:linear-gradient(145deg,rgba(19,39,49,.94),rgba(8,15,26,.98)); color:var(--text); text-align:left; cursor:pointer; transition:transform .18s,border-color .18s,background .18s; }
+.aa-mode-card:hover:not(:disabled) { transform:translateY(-2px); border-color:rgba(111,242,199,.68); background:linear-gradient(145deg,rgba(22,54,57,.96),rgba(8,15,26,.98)); }
+.aa-mode-card:disabled { cursor:not-allowed; opacity:.68; }
+.aa-mode-card.unavailable { border-color:rgba(147,171,198,.15); }
+.aa-mode-card > svg { margin-top:26px; color:var(--mint); }
+.aa-mode-index { color:#8caaad; font:9px var(--app-font-mono); letter-spacing:.14em; }
+.aa-mode-card h2 { margin:14px 0 8px; color:#f1f7f8; font-size:21px; letter-spacing:-.045em; }
+.aa-mode-card p { max-width:480px; margin:0; color:#91a5b1; font-size:11px; line-height:1.75; }
+.aa-mode-link { display:flex; align-items:center; gap:8px; margin-top:auto; padding-top:20px; color:#91f0d0; font-size:10px; font-weight:700; }
+.aa-production-strip { display:grid; grid-column:1 / -1; grid-template-columns: .7fr 1fr 1.5fr 1fr; gap:12px; align-items:center; padding:14px 17px; border:1px solid rgba(147,171,198,.13); border-radius:8px; background:rgba(8,15,25,.58); color:#94a9b3; font:8px/1.5 var(--app-font-mono); }
+.aa-production-strip strong { color:#8cdbc3; letter-spacing:.1em; }
+.aa-generation-form { display:grid; gap:15px; padding:17px; }
+.aa-generation-block { display:grid; gap:12px; padding:16px; }
+.aa-textarea { width:100%; min-height:170px; resize:vertical; padding:12px; border:1px solid rgba(147,171,198,.2); border-radius:7px; background:#0b1421; color:#e1edf0; font:11px/1.6 var(--app-font-sans); }
+.aa-textarea.compact { min-height:108px; }
+.aa-choice { display:flex; align-items:center; gap:8px; }
+.aa-production-details { display:grid; gap:9px; padding:14px; }
+.aa-crop-review { margin-top:14px; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:rgba(8,15,26,.72); }
+.aa-crop-pair { padding:13px; }
+.aa-crop-preview-card { display:grid; gap:8px; min-width:0; }
+.aa-crop-preview { position:relative; width:100%; overflow:hidden; border:1px solid rgba(147,171,198,.19); border-radius:7px; background-color:#091321; background-image:linear-gradient(rgba(120,154,182,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(120,154,182,.05) 1px,transparent 1px); background-size:20px 20px; }
+.aa-crop-preview img { position:absolute; max-width:none; max-height:none; object-fit:fill; }
+.aa-crop-preview > span { position:absolute; inset:0; display:grid; place-items:center; padding:18px; color:#8498a8; font-size:10px; text-align:center; }
+.aa-quality-panel { display:grid; gap:9px; padding:12px; border:1px solid rgba(111,242,199,.16); border-radius:8px; background:rgba(41,101,85,.08); }
+.aa-quality-panel .aa-eyebrow { margin:0; }
+.aa-quality-panel > div { display:flex; justify-content:space-between; gap:12px; color:#9bb0b8; font-size:9px; }
+.aa-quality-panel strong { color:#dcf5eb; font:10px var(--app-font-mono); text-align:right; }
+.aa-quality-panel > p:last-child { margin:0; color:#879ca8; font-size:9px; line-height:1.55; }
 .aa-loading-screen { display:grid; min-height:100dvh; place-items:center; padding:24px; background:radial-gradient(ellipse at 50% 45%,rgba(23,92,89,.14),transparent 44%),#070c14; }
 .aa-loading-card { width:min(460px,100%); padding:32px; border:1px solid var(--line); border-radius:16px; background:rgba(12,21,34,.84); text-align:center; box-shadow:var(--shadow); }
 .aa-loading-card .aa-mark { width:52px; height:52px; margin:0 auto 18px; animation:aa-breathe 1.8s ease-in-out infinite; }
@@ -256,6 +285,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
  .aa-heading { align-items:flex-start; flex-direction:column; gap:10px; }.aa-meta { text-align:left; }
  .aa-footer { flex-direction:column; }.aa-controls { align-items:stretch; flex-direction:column; }.aa-control-right { justify-content:flex-end; }
  .aa-image-stage { min-height:270px; }.aa-pair { grid-template-columns:1fr; }
+  .aa-mode-grid { grid-template-columns:1fr; }.aa-mode-card { min-height:230px; padding:21px; }
+  .aa-production-strip { grid-template-columns:1fr; gap:7px; }
 }
 @media(max-width:460px) {
  .aa-workspace { width:calc(100% - 22px); }.aa-title { font-size:24px; }.aa-image-stage { min-height:230px; margin:9px; }

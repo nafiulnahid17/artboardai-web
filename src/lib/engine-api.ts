@@ -22,6 +22,13 @@ export interface EngineCapabilities {
   };
   ocr: { available: boolean; engine: string; advisory_only: boolean };
   ai_assistance: { configured: boolean; features: string[]; automatic_export_or_approval: boolean };
+  ai_artwork_generation?: {
+    configured: boolean;
+    models: string[];
+    output: string;
+    requires_operator_review: boolean;
+    automatic_export_or_approval: boolean;
+  };
   panel_detection: {
     local_candidate_detection: boolean;
     front_back_classification_without_ai: boolean;
@@ -110,6 +117,14 @@ export interface CreateArtworkJobRequest {
   dpi: 330 | 600;
   formats: Array<"svg" | "eps">;
   native_ai_mode: "disabled";
+}
+
+export interface CreateGeneratedArtworkRequest {
+  brief: string;
+  front_notes: string;
+  back_notes: string;
+  dpi: 330 | 600;
+  formats: Array<"svg" | "eps">;
 }
 
 export interface ArtworkJob {
@@ -212,6 +227,15 @@ export const engineApi = {
 
   createJob(payload: CreateArtworkJobRequest, signal?: AbortSignal) {
     return request<ArtworkJob>("/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  },
+
+  createGeneratedJob(payload: CreateGeneratedArtworkRequest, signal?: AbortSignal) {
+    return request<ArtworkJob>("/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
